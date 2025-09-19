@@ -101,7 +101,12 @@ def step_pick_best_log(pred_df: pd.DataFrame, horizon: int = 30, benchmark_symbo
 
     uniq_dates = sorted(pred_df["Date"].unique().tolist())
     if not uniq_dates:
-        return pd.DataFrame(columns=["Date", "Picked", "PredLog", "Realized", "BuyDate", "BuyPrice", "SellDate", "SellPrice", "Equity", "BenchROI", "BenchEquity"])
+        return pd.DataFrame(columns=[
+            "Date", "Picked", "PredLog", "Realized",
+            "BuyDate", "BuyPrice", "SellDate", "SellPrice", "PredSellPrice",
+            "TradeBuyPrices", "TradeSellPrices", "TradePredSellPrices",
+            "Equity", "BenchROI", "BenchEquity"
+        ])
 
     # decision dates separated by at least `horizon` days
     decisions = []
@@ -134,6 +139,25 @@ def step_pick_best_log(pred_df: pd.DataFrame, horizon: int = 30, benchmark_symbo
         end = pd.Timestamp(max(decisions)) + pd.Timedelta(days=horizon + 10)
         sym_maps = _prep_symbol_maps(
             chosen_syms, start, end, use_adj=use_adj_close)
+
+    def _format_trade_prices(trades, field):
+        if not trades:
+            return None
+        parts = []
+        for tr in trades:
+            val = tr.get(field)
+            if val is None:
+                val_str = ""
+            else:
+                try:
+                    if isinstance(val, (int, float, np.integer, np.floating)):
+                        val_str = f"{float(val):.4f}" if np.isfinite(val) else ""
+                    else:
+                        val_str = str(val)
+                except Exception:
+                    val_str = str(val)
+            parts.append(f"{tr.get('Symbol', '')}:{val_str}")
+        return "|".join(parts)
 
     equity = 1.0
     bench_equity = 1.0
@@ -174,8 +198,7 @@ def step_pick_best_log(pred_df: pd.DataFrame, horizon: int = 30, benchmark_symbo
 
         # Strategy leg (portfolio aggregation)
         real_simple = 0.0
-        buys = []
-        sells = []
+        trade_details = []
         if confident and len(pick_list) > 0:
             for sym_i, wi, pred_i in pick_list:
                 buy_p = sell_p = np.nan
@@ -195,25 +218,43 @@ def step_pick_best_log(pred_df: pd.DataFrame, horizon: int = 30, benchmark_symbo
                         sl[sl["Symbol"] == sym_i]["target_log"].iloc[0])
                 r_simple = float(np.exp(realized_log) - 1.0)
                 real_simple += wi * r_simple
-                buys.append((sym_i, buy_dt, float(buy_p)
-                            if np.isfinite(buy_p) else None, wi))
-                sells.append((sym_i, sell_dt, float(sell_p)
-                             if np.isfinite(sell_p) else None, wi))
-        else:
-            real_simple = 0.0  # hold/skip
+                pred_sell_price = None
+                if np.isfinite(buy_p):
+                    pred_sell_price = float(buy_p * np.exp(pred_i))
+                trade_details.append({
+                    "Symbol": sym_i,
+                    "Weight": float(wi),
+                    "BuyDate": buy_dt,
+                    "BuyPrice": float(buy_p) if np.isfinite(buy_p) else None,
+                    "SellDate": sell_dt,
+                    "SellPrice": float(sell_p) if np.isfinite(sell_p) else None,
+                    "PredictedSellPrice": pred_sell_price,
+                    "PredLog": float(pred_i),
+                    "PredictedROI": float(np.exp(pred_i) - 1.0),
+                    "RealizedLog": float(realized_log),
+                    "RealizedROI": r_simple,
+                })
 
         equity *= (1.0 + real_simple)
-        picks_str = ",".join([f"{s}:{w:.3f}" for s, _, __, w in buys]) if len(
-            buys) > 0 else ("HOLD_SPY" if not confident else "")
+        picks_str = (
+            ",".join(f"{t['Symbol']}:{t['Weight']:.3f}" for t in trade_details)
+            if trade_details
+            else ("HOLD_SPY" if not confident else "")
+        )
+        first_trade = trade_details[0] if trade_details else {}
         rows.append({
             "Date": d.normalize(),
             "Picked": picks_str,
             "PredLog": float(sl.iloc[0][use_col]) if len(sl) > 0 else None,
             "Realized": real_simple,
-            "BuyDate": buys[0][1] if len(buys) > 0 else None,
-            "BuyPrice": buys[0][2] if len(buys) > 0 else None,
-            "SellDate": sells[0][1] if len(sells) > 0 else None,
-            "SellPrice": sells[0][2] if len(sells) > 0 else None,
+            "BuyDate": first_trade.get("BuyDate"),
+            "BuyPrice": first_trade.get("BuyPrice"),
+            "SellDate": first_trade.get("SellDate"),
+            "SellPrice": first_trade.get("SellPrice"),
+            "PredSellPrice": first_trade.get("PredictedSellPrice"),
+            "TradeBuyPrices": _format_trade_prices(trade_details, "BuyPrice"),
+            "TradeSellPrices": _format_trade_prices(trade_details, "SellPrice"),
+            "TradePredSellPrices": _format_trade_prices(trade_details, "PredictedSellPrice"),
             "Equity": equity,
             "BenchROI": float(bench_roi) if bench_roi is not None else None,
             "BenchEquity": float(bench_equity) if bench_roi is not None else None

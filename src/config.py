@@ -11,6 +11,7 @@ class Config:
     horizon: int = 30
     use_adj_close: int = 1
     benchmark_symbol: str = "SPY"
+    no_download: int = 0
 
     # train
     batch_size: int = 64
@@ -62,6 +63,8 @@ def parse_args() -> 'Config':
     p.add_argument("--horizon", type=int, default=30)
     p.add_argument("--use_adj_close", type=int, default=1)
     p.add_argument("--benchmark_symbol", type=str, default="SPY")
+    p.add_argument("--no_download", action="store_true",
+                   help="Use cached price history without downloading updates")
     # train
     p.add_argument("--batch_size", type=int, default=64)
     p.add_argument("--epochs", type=int, default=150)
@@ -104,6 +107,7 @@ def parse_args() -> 'Config':
     return Config(
         n=a.n, history_years=a.history_years, window=a.window, horizon=a.horizon,
         use_adj_close=a.use_adj_close, benchmark_symbol=a.benchmark_symbol,
+        no_download=int(a.no_download),
         batch_size=a.batch_size, epochs=a.epochs, lr=a.lr, amp=a.amp, compile=a.compile, seed=a.seed,
         rnn_type=a.rnn_type, hidden_size=a.hidden_size, num_layers=a.num_layers, dropout=a.dropout,
         m=a.m, k=a.k, lambda_conf=a.lambda_conf, weighting=a.weighting, softmax_temp=a.softmax_temp,
