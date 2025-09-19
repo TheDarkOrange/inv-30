@@ -50,7 +50,7 @@ class Config:
     blend_ridge: int = 0
     blend_alpha: float = 1.0
 
-    t_recent_months: int = 3
+    t_recent_months: int = 12
 
 
 def parse_args() -> 'Config':
@@ -58,7 +58,7 @@ def parse_args() -> 'Config':
     # data
     p.add_argument("--n", type=int, default=50)
     p.add_argument("--history_years", type=int, default=10)
-    p.add_argument("--window", type=int, default=180)
+    p.add_argument("--window", type=int, default=120)
     p.add_argument("--horizon", type=int, default=30)
     p.add_argument("--use_adj_close", type=int, default=1)
     p.add_argument("--benchmark_symbol", type=str, default="SPY")
@@ -78,7 +78,7 @@ def parse_args() -> 'Config':
     # ensemble
     p.add_argument("--m", type=int, default=1)
     # selection / confidence
-    p.add_argument("--k", type=int, default=1)
+    p.add_argument("--k", type=int, default=4)
     p.add_argument("--lambda_conf", type=float, default=1.0)
     p.add_argument("--weighting", type=str, default="equal",
                    choices=["equal", "softmax"])
@@ -98,7 +98,7 @@ def parse_args() -> 'Config':
     p.add_argument("--blend_ridge", type=int, default=0)
     p.add_argument("--blend_alpha", type=float, default=1.0)
 
-    p.add_argument("--t_recent_months", type=int, default=3)
+    p.add_argument("--t_recent_months", type=int, default=12)
 
     a = p.parse_args()
     return Config(
