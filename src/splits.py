@@ -1,96 +1,77 @@
-from typing import Tuple, List, Dict
+from typing import Tuple
 import numpy as np
 import pandas as pd
 
 
-def _as_ts(x): return pd.to_datetime(x).tz_localize(None)
-
-
-def build_rolling_folds(
+def build_train_val_masks(
     dts: pd.Series,
-    eligible_mask: np.ndarray,
-    folds: int,
-    val_len_days: int,
-    purge_days: int
-) -> List[Dict]:
-    """
-    Create forward-chaining folds on the eligible time span.
-    Each fold i uses:
-      - VAL: [val_start_i, val_end_i]
-      - TRAIN: <= (val_start_i - purge_days)
-    Returns list of dicts: {"val_start","val_end","train_mask","val_mask"}
-    """
-    dts = pd.to_datetime(dts)
-    rest_idx = np.where(eligible_mask)[0]
-    if rest_idx.size == 0:
-        return []
+    scheme: str = "oldest_year",
+    cutoff: pd.Timestamp = None,   # exclusive upper bound for train/val
+    wf_val_months: int = 1,
+    wf_stride_months: int = 1,
+    wf_max_splits: int = 6,
+    seed: int = 42,
+    purge_days: int = 0,
+) -> Tuple[np.ndarray, np.ndarray]:
+    dts = pd.to_datetime(pd.Series(dts))
+    N = len(dts)
+    mtr = np.zeros(N, dtype=bool)
+    mva = np.zeros(N, dtype=bool)
 
-    rest_dates = dts[rest_idx]
-    start_rest = rest_dates.min()
-    end_rest = rest_dates.max()
+    if cutoff is None:
+        cutoff = dts.max()
+    pre_mask = (dts <= cutoff)
 
-    total_days = (end_rest - start_rest).days
-    if total_days <= val_len_days + purge_days + 5:
-        # too short; fallback to single fold at the end
-        val_start = end_rest - pd.Timedelta(days=val_len_days)
-        val_end = end_rest
-        val_mask = (eligible_mask & (dts >= val_start)
-                    & (dts <= val_end)).values
-        train_mask = (eligible_mask & (
-            dts < (val_start - pd.Timedelta(days=purge_days)))).values
-        return [{"val_start": val_start, "val_end": val_end, "train_mask": train_mask, "val_mask": val_mask}]
+    if scheme == "oldest_year":
+        if pre_mask.sum() == 0:
+            return mtr, mva
+        dmin = dts[pre_mask].min()
+        val_end = dmin + pd.DateOffset(years=1)
+        mva = (dts <= val_end) & pre_mask
+        mtr = pre_mask & (~mva)
 
-    # space fold starts across the interval
-    usable_days = total_days - val_len_days
-    step_days = max(1, usable_days // max(1, folds))
-    fold_starts = [start_rest +
-                   pd.Timedelta(days=i * step_days) for i in range(folds)]
-    folds_out = []
-    for fs in fold_starts:
-        val_start = fs
-        val_end = fs + pd.Timedelta(days=val_len_days)
-        if val_end > end_rest:
-            val_end = end_rest
-            val_start = val_end - pd.Timedelta(days=val_len_days)
-        val_mask = (eligible_mask & (dts >= val_start)
-                    & (dts <= val_end)).values
-        train_cut = val_start - pd.Timedelta(days=purge_days)
-        train_mask = (eligible_mask & (dts <= train_cut)).values
-        # guard: ensure there is some train data
-        if train_mask.sum() == 0 or val_mask.sum() == 0:
-            continue
-        folds_out.append({
-            "val_start": val_start, "val_end": val_end,
-            "train_mask": train_mask, "val_mask": val_mask
-        })
-    if not folds_out:
-        # final fallback: single end fold
-        val_start = end_rest - pd.Timedelta(days=val_len_days)
-        val_end = end_rest
-        val_mask = (eligible_mask & (dts >= val_start)
-                    & (dts <= val_end)).values
-        train_mask = (eligible_mask & (
-            dts < (val_start - pd.Timedelta(days=purge_days)))).values
-        folds_out = [{"val_start": val_start, "val_end": val_end,
-                      "train_mask": train_mask, "val_mask": val_mask}]
-    return folds_out
+    elif scheme == "walk_forward":
+        val_mask = np.zeros(N, dtype=bool)
+        purge_mask = np.zeros(N, dtype=bool)
+        end = pd.to_datetime(cutoff)
+        taken = 0
+        purge_td = pd.Timedelta(days=int(max(0, purge_days)))
+
+        while taken < int(wf_max_splits):
+            start = end - pd.DateOffset(months=int(wf_val_months))
+            block = (dts > start) & (dts <= end) & pre_mask
+            if block.sum() == 0:
+                if (dts[pre_mask].min() >= start):
+                    break
+            val_mask |= block
+
+            if purge_td.value > 0:
+                pre_purge = (dts > (start - purge_td)
+                             ) & (dts <= start) & pre_mask
+                post_purge = (dts > end) & (dts <= (end + purge_td)) & pre_mask
+                purge_mask |= (pre_purge | post_purge)
+
+            taken += 1
+            end = start - pd.DateOffset(months=int(wf_stride_months))
+            if end <= dts[pre_mask].min():
+                break
+
+        mva = val_mask
+        mtr = pre_mask & (~val_mask) & (~purge_mask)
+
+    else:
+        raise ValueError(f"Unknown val scheme: {scheme}")
+
+    return mtr, mva
 
 
-def last_rolling_fold_masks(
-    dts: pd.Series,
-    eligible_mask: np.ndarray,
-    folds: int,
-    val_len_days: int,
-    purge_days: int
-) -> Tuple[np.ndarray, np.ndarray, dict]:
-    """
-    Convenience: return (train_mask, val_mask, info) for the LAST fold.
-    """
-    flds = build_rolling_folds(
-        dts, eligible_mask, folds, val_len_days, purge_days)
-    if not flds:
-        return eligible_mask, (~eligible_mask), {"val_start": None, "val_end": None, "folds": []}
-    last = flds[-1]
-    info = {"val_start": last["val_start"],
-            "val_end": last["val_end"], "folds": flds}
-    return last["train_mask"], last["val_mask"], info
+def random_split_pretest(dts: pd.Series, cutoff: pd.Timestamp, val_frac: float = 0.15, seed: int = 42):
+    dts = pd.to_datetime(pd.Series(dts))
+    pre_idx = np.where(dts <= cutoff)[0]
+    rng = np.random.default_rng(seed)
+    perm = rng.permutation(pre_idx)
+    n_val = max(1, int(len(pre_idx) * val_frac)) if len(pre_idx) > 0 else 0
+    val_idx = set(perm[:n_val].tolist())
+    mva = np.array([i in val_idx for i in range(len(dts))], dtype=bool)
+    mtr = (dts <= cutoff).values & (~mva)
+    return mtr, mva

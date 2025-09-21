@@ -47,8 +47,7 @@ def main():
     print("Downloading & building panel...")
     panel = build_panel(
         symbols, start=start, end=end, horizon=cfg.horizon,
-        use_adj_close=bool(cfg.use_adj_close), extra_features=bool(cfg.extra_features),
-        allow_download=not bool(cfg.no_download)
+        use_adj_close=bool(cfg.use_adj_close), extra_features=bool(cfg.extra_features)
     )
     if panel.empty:
         raise RuntimeError("No panel data built. Check tickers/network.")

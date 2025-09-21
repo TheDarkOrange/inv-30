@@ -88,11 +88,10 @@ def technical_features(df, use_adj=True, extra=True):
     return out.dropna()
 
 
-def build_panel(symbols: List[str], start, end, horizon, use_adj_close=True, extra_features=True, allow_download: bool = True) -> pd.DataFrame:
-    price = load_or_download_price_history(
-        symbols, start, end, allow_download=allow_download)
+def build_panel(symbols: List[str], start, end, horizon, use_adj_close=True, extra_features=True) -> pd.DataFrame:
+    price = load_or_download_price_history(symbols, start, end)
     bench = load_or_download_price_history(
-        ["SPY"], start, end, allow_download=allow_download).get("SPY", pd.DataFrame())
+        ["SPY"], start, end).get("SPY", pd.DataFrame())
 
     bench_log_fwd = None
     if bench is not None and not bench.empty:

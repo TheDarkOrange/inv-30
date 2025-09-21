@@ -51,58 +51,44 @@ def _has_price_cols(df: pd.DataFrame) -> bool:
     return any(k in cols for k in ("adjclose", "close"))
 
 
-def load_or_download_price_history(symbols: List[str], start, end, cache_dir: str = "data", allow_download: bool = True) -> Dict[str, pd.DataFrame]:
+def load_or_download_price_history(symbols: List[str], start, end, cache_dir: str = "data") -> Dict[str, pd.DataFrame]:
     ensure_dir(cache_dir)
     today = today_str_local()
     out: Dict[str, pd.DataFrame] = {}
     # warmup pad for indicators
     pad_start = pd.to_datetime(start) - pd.Timedelta(days=400)
     pad_end = pd.to_datetime(end) + pd.Timedelta(days=10)
-
-    def _read_cached(path: str) -> pd.DataFrame:
-        if not os.path.exists(path):
-            return pd.DataFrame()
-        df = pd.read_csv(path, parse_dates=["Date"]).set_index("Date")
-        df = _normalize_cols(df)
-        df.index = pd.to_datetime(df.index)
-        return df
-
     for s in symbols:
         path = os.path.join(cache_dir, f"{s}.csv")
-        df_cached = _read_cached(path)
-        has_price_cols = _has_price_cols(df_cached)
-
-        need_dl = False
-        if allow_download:
-            if not has_price_cols:
-                need_dl = True
-            else:
-                if os.path.exists(path):
-                    file_day = pd.to_datetime(os.path.getmtime(
-                        path), unit='s').date().isoformat()
-                    if file_day != today:
-                        need_dl = True
-                else:
-                    need_dl = True
-
+        need_dl = True
+        if os.path.exists(path):
+            file_day = pd.to_datetime(os.path.getmtime(
+                path), unit='s').date().isoformat()
+            if file_day == today:
+                need_dl = False
         if need_dl:
-            df_new = _dl_one(s, pad_start, pad_end)
-            if not df_new.empty:
-                df_new.to_csv(path)
-            df_cached = _read_cached(path)
+            df = _dl_one(s, pad_start, pad_end)
+            if not df.empty:
+                df.to_csv(path)
 
-        if allow_download and (df_cached.empty or not _has_price_cols(df_cached)):
-            df_new = _dl_one(s, pad_start, pad_end)
-            if not df_new.empty:
-                df_new.to_csv(path)
-            df_cached = _read_cached(path)
+        # read what we have
+        df = pd.read_csv(path, parse_dates=["Date"]).set_index(
+            "Date") if os.path.exists(path) else pd.DataFrame()
+        df = _normalize_cols(df)
+        if (not _has_price_cols(df)):
+            # self-heal once: re-download if price columns missing
+            df = _dl_one(s, pad_start, pad_end)
+            if not df.empty:
+                df.to_csv(path)
+        # final load
+        if os.path.exists(path):
+            df = pd.read_csv(path, parse_dates=["Date"]).set_index("Date")
+            df = _normalize_cols(df)
+            df.index = pd.to_datetime(df.index)
 
-        if df_cached is None or df_cached.empty:
-            df_final = pd.DataFrame()
-        else:
-            df_final = df_cached.sort_index()
-            df_final = df_final[(df_final.index >= pad_start)
-                                & (df_final.index <= pad_end)]
-
-        out[s] = df_final
+        # clip to window + pad
+        if not df.empty:
+            df = df.sort_index()
+            df = df[(df.index >= pad_start) & (df.index <= pad_end)]
+        out[s] = df
     return out
